@@ -11,9 +11,9 @@ PASSWORD_RESET_OTP = {}
 
 def load_admin_credentials():
     default_credentials = {
-        "username": "admin",
-        "password": "ChangeMe123!",
-        "email": "",
+        "username": "himanshuprajapat",
+        "password": "Himan@12345",
+        "email": "hp81790@gmail.com",
     }
 
     if not ADMIN_CONFIG_FILE.exists():
