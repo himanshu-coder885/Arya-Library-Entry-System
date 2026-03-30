@@ -67,7 +67,7 @@ def _seed_runtime_file(source: Path, destination: Path, default_text: str = ""):
 
 if os.environ.get("VERCEL"):
     _seed_runtime_file(ROOT_VISITS_FILE, VISITS_FILE, "visit_id,student_id,name,father_name,date,entry_time,exit_time\n")
-    _seed_runtime_file(ROOT_ADMIN_CONFIG_FILE, ADMIN_CONFIG_FILE, '{\n  "username": "himanshuprajapat",\n  "password": "Himan@12345",\n  "email": "hp81790@gmail.com"\n}\n')
+    _seed_runtime_file(ROOT_ADMIN_CONFIG_FILE, ADMIN_CONFIG_FILE, '{\n  "username": "admin",\n  "password": "ChangeMe123!",\n  "email": ""\n}\n')
     _seed_runtime_file(ROOT_EMAIL_CONFIG_FILE, EMAIL_CONFIG_FILE, '{\n  "smtp_host": "smtp.gmail.com",\n  "smtp_port": 587,\n  "sender_email": "",\n  "sender_name": "Arya Central Library",\n  "sender_password": "",\n  "use_tls": true\n}\n')
     if ROOT_LIBRARY_DB_FILE.exists() and not LIBRARY_DB_FILE.exists():
         shutil.copy2(ROOT_LIBRARY_DB_FILE, LIBRARY_DB_FILE)

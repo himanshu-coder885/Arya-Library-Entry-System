@@ -70,7 +70,7 @@ if (forgotPasswordBtn) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username: usernameInput.value.trim() || "himanshuprajapat",
+          username: usernameInput.value.trim(),
         }),
       });
       const data = await response.json();
