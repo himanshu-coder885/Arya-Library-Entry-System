@@ -36,13 +36,6 @@ def load_visits():
 
 
 def save_visits(visits):
-    if not VISITS_FILE.exists():
-        import csv
-
-        with VISITS_FILE.open("w", newline="", encoding="utf-8") as file:
-            writer = csv.DictWriter(file, fieldnames=VISIT_FIELDS)
-            writer.writeheader()
-
     import csv
 
     with VISITS_FILE.open("w", newline="", encoding="utf-8") as file:
@@ -103,6 +96,7 @@ def get_last_scan_timestamp(visits, student_id):
 
 
 def process_scan_result(student_id):
+    student_id = str(student_id).strip()
     students = load_students()
     visits = load_visits()
     now = datetime.now()
@@ -154,6 +148,14 @@ def process_scan_result(student_id):
         }
 
     open_visit = update_visit_exit(student_id, today)
+    if open_visit is None:
+        return {
+            "ok": False,
+            "message": "Could not update the existing visit. Please try again.",
+            "student": student,
+            "visit": None,
+            "action": "error",
+        }
     save_visits(load_visits())
     return {
         "ok": True,

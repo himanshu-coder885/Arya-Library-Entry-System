@@ -10,8 +10,11 @@ from library_app.auth import (
     create_session,
     is_authenticated,
     load_admin_credentials,
+    mask_email,
     remove_session,
     save_admin_credentials,
+    store_password_reset_otp,
+    verify_admin_password,
     verify_password_reset_otp,
 )
 from library_app.config import (
@@ -263,7 +266,7 @@ def login_api():
     username = str(payload.get("username", "")).strip()
     password = str(payload.get("password", ""))
     credentials = load_admin_credentials()
-    if username != credentials["username"] or password != credentials["password"]:
+    if username != credentials["username"] or not verify_admin_password(password, credentials):
         return jsonify({"ok": False, "message": "Invalid librarian credentials."}), 401
     session_id = create_session(username)
     response = jsonify({"ok": True, "message": "Login successful."})
@@ -287,9 +290,11 @@ def forgot_password_api():
     if requested_username != credentials["username"]:
         return jsonify({"ok": False, "message": "Username does not match the admin account."}), 400
     admin_email = credentials.get("email", "")
-    otp_code = create_password_reset_otp(requested_username)
+    otp_code = create_password_reset_otp()
     ok, message = send_password_recovery_email(admin_email, requested_username, otp_code)
-    return jsonify({"ok": ok, "message": message, "admin_email": admin_email}), (200 if ok else 400)
+    if ok:
+        store_password_reset_otp(requested_username, otp_code)
+    return jsonify({"ok": ok, "message": message, "admin_email": mask_email(admin_email)}), (200 if ok else 400)
 
 
 @app.post("/api/reset-password")
