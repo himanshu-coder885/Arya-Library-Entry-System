@@ -1,9 +1,23 @@
 import json
+import os
 import smtplib
 from datetime import datetime
 from email.message import EmailMessage
 
 from library_app.config import EMAIL_CONFIG_FILE
+
+
+def _parse_bool(value, default=True):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def load_email_config():
@@ -26,18 +40,25 @@ def load_email_config():
         return default_config
 
     merged = default_config | config
-    merged["smtp_port"] = int(merged.get("smtp_port", 587) or 587)
-    merged["use_tls"] = bool(merged.get("use_tls", True))
+    merged["smtp_host"] = str(os.environ.get("LIBRARY_SMTP_HOST", merged.get("smtp_host", ""))).strip() or default_config["smtp_host"]
+    merged["smtp_port"] = int(os.environ.get("LIBRARY_SMTP_PORT", merged.get("smtp_port", 587)) or 587)
+    merged["sender_email"] = str(os.environ.get("LIBRARY_SMTP_SENDER_EMAIL", merged.get("sender_email", ""))).strip()
+    merged["sender_name"] = str(os.environ.get("LIBRARY_SMTP_SENDER_NAME", merged.get("sender_name", default_config["sender_name"]))).strip() or default_config["sender_name"]
+    merged["sender_password"] = str(os.environ.get("LIBRARY_SMTP_SENDER_PASSWORD", merged.get("sender_password", ""))).strip()
+    merged["use_tls"] = _parse_bool(os.environ.get("LIBRARY_SMTP_USE_TLS", merged.get("use_tls", True)))
     return merged
 
 
 def send_password_recovery_email(admin_email, requested_username, otp_code):
     config = load_email_config()
+    admin_email = str(admin_email).strip()
     sender_email = str(config.get("sender_email", "")).strip()
     sender_password = str(config.get("sender_password", "")).strip()
 
+    if not admin_email:
+        return False, "Admin email is not configured yet."
     if not sender_email or not sender_password:
-        return False, "Email sending is not configured yet. Add sender email and app password in email_config.json."
+        return False, "Email sending is not configured yet. Add sender email and app password in environment variables or email_config.json."
 
     message = EmailMessage()
     message["Subject"] = "Arya Central Library Password Reset OTP"
@@ -56,8 +77,10 @@ def send_password_recovery_email(admin_email, requested_username, otp_code):
 
     try:
         with smtplib.SMTP(config["smtp_host"], config["smtp_port"], timeout=20) as server:
+            server.ehlo()
             if config["use_tls"]:
                 server.starttls()
+                server.ehlo()
             server.login(sender_email, sender_password)
             server.send_message(message)
     except Exception as error:

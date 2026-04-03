@@ -12,8 +12,11 @@ from library_app.auth import (
     create_session,
     is_authenticated,
     load_admin_credentials,
+    mask_email,
     remove_session,
     save_admin_credentials,
+    store_password_reset_otp,
+    verify_admin_password,
     verify_password_reset_otp,
 )
 from library_app.config import (
@@ -350,7 +353,7 @@ class LibraryDashboardHandler(BaseHTTPRequestHandler):
             username = str(payload.get("username", "")).strip()
             password = str(payload.get("password", ""))
             credentials = load_admin_credentials()
-            if username != credentials["username"] or password != credentials["password"]:
+            if username != credentials["username"] or not verify_admin_password(password, credentials):
                 self._json_response({"ok": False, "message": "Invalid librarian credentials."}, status=HTTPStatus.UNAUTHORIZED)
                 return
 
@@ -391,9 +394,11 @@ class LibraryDashboardHandler(BaseHTTPRequestHandler):
                 self._json_response({"ok": False, "message": "Username does not match the admin account."}, status=HTTPStatus.BAD_REQUEST)
                 return
             admin_email = credentials.get("email", "")
-            otp_code = create_password_reset_otp(requested_username)
+            otp_code = create_password_reset_otp()
             ok, message = send_password_recovery_email(admin_email, requested_username, otp_code)
-            self._json_response({"ok": ok, "message": message, "admin_email": admin_email}, status=HTTPStatus.OK if ok else HTTPStatus.BAD_REQUEST)
+            if ok:
+                store_password_reset_otp(requested_username, otp_code)
+            self._json_response({"ok": ok, "message": message, "admin_email": mask_email(admin_email)}, status=HTTPStatus.OK if ok else HTTPStatus.BAD_REQUEST)
             return
 
         if self.path == "/api/reset-password":

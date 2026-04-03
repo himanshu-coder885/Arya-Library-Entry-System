@@ -17,6 +17,7 @@ const resultAction = document.getElementById("resultAction");
 const resultName = document.getElementById("resultName");
 const resultStudentId = document.getElementById("resultStudentId");
 const resultFatherName = document.getElementById("resultFatherName");
+const resultPhone = document.getElementById("resultPhone");
 const resultCourse = document.getElementById("resultCourse");
 const resultDate = document.getElementById("resultDate");
 const resultEntry = document.getElementById("resultEntry");
@@ -33,6 +34,12 @@ let cameraBusy = false;
 let lastDetectedValue = "";
 let lastDetectedAt = 0;
 let zxingReader = null;
+
+function setText(element, value, fallback = "-") {
+  if (element) {
+    element.textContent = value || fallback;
+  }
+}
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -216,20 +223,25 @@ function renderResultCard(result) {
   }
 
   resultCard.classList.remove("hidden");
-  resultAction.textContent = result.action === "entry"
-    ? "Entry Recorded"
-    : result.action === "exit"
-      ? "Exit Recorded"
-      : result.action === "duplicate"
-        ? "Duplicate Scan Blocked"
-        : "Latest Scan";
-  resultName.textContent = result.student.name || "Unknown Student";
-  resultStudentId.textContent = result.student.student_id || "-";
-  resultFatherName.textContent = result.student.father_name || "-";
-  resultCourse.textContent = result.student.course || "-";
-  resultDate.textContent = result.visit?.date || "-";
-  resultEntry.textContent = result.visit?.entry_time || "-";
-  resultExit.textContent = result.visit?.exit_time || (result.action === "entry" ? "Inside" : "-");
+  setText(
+    resultAction,
+    result.action === "entry"
+      ? "Entry Recorded"
+      : result.action === "exit"
+        ? "Exit Recorded"
+        : result.action === "duplicate"
+          ? "Duplicate Scan Blocked"
+          : "Latest Scan",
+    "Latest Scan"
+  );
+  setText(resultName, result.student.name, "Unknown Student");
+  setText(resultStudentId, result.student.student_id);
+  setText(resultFatherName, result.student.father_name);
+  setText(resultPhone, result.student.phone);
+  setText(resultCourse, result.student.course);
+  setText(resultDate, result.visit?.date);
+  setText(resultEntry, result.visit?.entry_time);
+  setText(resultExit, result.visit?.exit_time || (result.action === "entry" ? "Inside" : "-"));
 }
 
 async function stopCameraScan() {
@@ -250,12 +262,18 @@ async function stopCameraScan() {
     }
   }
 
-  cameraVideo.srcObject = null;
-  cameraShell.classList.add("hidden");
+  if (cameraVideo) {
+    cameraVideo.srcObject = null;
+  }
+  if (cameraShell) {
+    cameraShell.classList.add("hidden");
+  }
   cameraBusy = false;
   lastDetectedValue = "";
   lastDetectedAt = 0;
-  cameraNote.textContent = "Camera ready. Hold the barcode clearly inside the frame.";
+  if (cameraNote) {
+    cameraNote.textContent = "Camera ready. Hold the barcode clearly inside the frame.";
+  }
 }
 
 async function detectFrame() {
@@ -323,6 +341,11 @@ async function startZxingFallback() {
       audio: false,
     });
 
+    if (!cameraVideo || !cameraShell || !cameraNote) {
+      setFeedback("Camera UI is not available on this page.", "error");
+      return;
+    }
+
     cameraVideo.srcObject = cameraStream;
     cameraShell.classList.remove("hidden");
     cameraBusy = false;
@@ -374,6 +397,12 @@ async function startCameraScan() {
       },
       audio: false,
     });
+
+    if (!cameraVideo || !cameraShell || !cameraNote) {
+      setFeedback("Camera UI is not available on this page.", "error");
+      return;
+    }
+
     cameraVideo.srcObject = cameraStream;
     cameraShell.classList.remove("hidden");
     cameraBusy = false;

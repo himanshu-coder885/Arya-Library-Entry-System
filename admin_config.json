@@ -1,5 +1,5 @@
 {
   "username": "himanshuprajapat",
-  "password": "Himan@12345",
+  "password_hash": "pbkdf2_sha256$390000$05c00ea0d86fa5946f6a6f62ab45987d$2cce9320a167c3cd5074e3b501688758b88ee22d22e5385eda90013d70c382f0",
   "email": "hp81790@gmail.com"
 }

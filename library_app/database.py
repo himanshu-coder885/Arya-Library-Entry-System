@@ -1,9 +1,7 @@
 import csv
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path
-
-from openpyxl import load_workbook
 
 from library_app.config import (
     BASE_DIR,
@@ -15,10 +13,18 @@ from library_app.config import (
 )
 
 
+@contextmanager
 def get_connection():
     conn = sqlite3.connect(LIBRARY_DB_FILE)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def initialize_database():
@@ -49,6 +55,15 @@ def initialize_database():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sync_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+
         student_columns = {row["name"] for row in conn.execute("PRAGMA table_info(students)").fetchall()}
         if "father_name" not in student_columns:
             conn.execute("ALTER TABLE students ADD COLUMN father_name TEXT DEFAULT ''")
@@ -56,6 +71,29 @@ def initialize_database():
         visit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(visits)").fetchall()}
         if "father_name" not in visit_columns:
             conn.execute("ALTER TABLE visits ADD COLUMN father_name TEXT DEFAULT ''")
+
+
+def _get_sync_state(conn, key):
+    row = conn.execute("SELECT value FROM sync_state WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else ""
+
+
+def _set_sync_state(conn, key, value):
+    conn.execute(
+        """
+        INSERT INTO sync_state(key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (key, value),
+    )
+
+
+def _file_signature(path):
+    if not path.exists():
+        return ""
+    stat = path.stat()
+    return f"{path.resolve()}::{stat.st_size}::{stat.st_mtime_ns}"
 
 
 def _normalize_student_row(row):
@@ -100,7 +138,18 @@ def _excel_source_files():
     return preferred + others
 
 
+def _students_source_signature():
+    excel_files = [path for path in _excel_source_files() if path.exists()]
+    if excel_files:
+        return "|".join(_file_signature(path) for path in excel_files)
+
+    source = _student_source_file()
+    return _file_signature(source)
+
+
 def import_students_from_excel():
+    from openpyxl import load_workbook
+
     excel_files = _excel_source_files()
     if not excel_files:
         return False
@@ -109,59 +158,61 @@ def import_students_from_excel():
 
     for excel_file in excel_files:
         workbook = load_workbook(excel_file, read_only=True, data_only=True)
+        try:
+            for sheet_name in workbook.sheetnames:
+                worksheet = workbook[sheet_name]
+                rows = worksheet.iter_rows(values_only=True)
 
-        for sheet_name in workbook.sheetnames:
-            worksheet = workbook[sheet_name]
-            rows = worksheet.iter_rows(values_only=True)
+                headers = None
+                for row in rows:
+                    values = [str(cell).strip() if cell is not None else "" for cell in row]
+                    if not any(values):
+                        continue
 
-            headers = None
-            for row in rows:
-                values = [str(cell).strip() if cell is not None else "" for cell in row]
-                if not any(values):
-                    continue
+                    normalized = [value.lower() for value in values]
+                    if headers is None:
+                        if (
+                            (
+                                "name" in normalized
+                                or "name " in normalized
+                                or "studente name" in normalized
+                                or "students name" in normalized
+                            )
+                            and "branch" in normalized
+                            and "code" in normalized
+                        ):
+                            headers = values
+                        continue
 
-                normalized = [value.lower() for value in values]
-                if headers is None:
-                    if (
-                        (
-                            "name" in normalized
-                            or "name " in normalized
-                            or "studente name" in normalized
-                            or "students name" in normalized
-                        )
-                        and "branch" in normalized
-                        and "code" in normalized
-                    ):
-                        headers = values
-                    continue
+                    row_map = dict(zip(headers, values))
+                    student_id = str(row_map.get("CODE", "")).strip()
+                    name = str(
+                        row_map.get("Name ", "")
+                        or row_map.get("Name", "")
+                        or row_map.get("STUDENTE NAME", "")
+                        or row_map.get("Students Name", "")
+                    ).strip()
+                    course = str(row_map.get("BRANCH", "") or row_map.get("Branch", "")).strip()
 
-                if headers is None:
-                    continue
+                    if not student_id or not name:
+                        continue
 
-                row_map = dict(zip(headers, values))
-                student_id = str(row_map.get("CODE", "")).strip()
-                name = str(
-                    row_map.get("Name ", "")
-                    or row_map.get("Name", "")
-                    or row_map.get("STUDENTE NAME", "")
-                    or row_map.get("Students Name", "")
-                ).strip()
-                course = str(row_map.get("BRANCH", "") or row_map.get("Branch", "")).strip()
+                    students[student_id] = {
+                        "student_id": student_id,
+                        "name": name,
+                        "father_name": str(
+                            row_map.get("FATHER NAME", "")
+                            or row_map.get("Father Name", "")
+                        ).strip(),
+                        "course": course,
+                        "phone": "",
+                        "valid_until": "",
+                    }
+        finally:
+            workbook.close()
 
-                if not student_id or not name:
-                    continue
-
-                students[student_id] = {
-                    "student_id": student_id,
-                    "name": name,
-                    "father_name": str(
-                        row_map.get("FATHER NAME", "")
-                        or row_map.get("Father Name", "")
-                    ).strip(),
-                    "course": course,
-                    "phone": "",
-                    "valid_until": "",
-                }
+    if not students:
+        return False
 
     with get_connection() as conn:
         conn.execute("DELETE FROM students")
@@ -187,26 +238,29 @@ def import_students_from_excel():
 def import_students_from_csv():
     source = _student_source_file()
     if source.suffix.lower() == ".xlsx":
-        return
+        return False
     if not source.exists():
-        return
+        return False
 
-    with source.open("r", newline="", encoding="utf-8") as file, get_connection() as conn:
+    students = []
+    with source.open("r", newline="", encoding="utf-8-sig") as file:
         reader = csv.DictReader(file)
         for row in reader:
             student = _normalize_student_row(row)
             if not student["student_id"]:
                 continue
+            students.append(student)
+
+    if not students:
+        return False
+
+    with get_connection() as conn:
+        conn.execute("DELETE FROM students")
+        for student in students:
             conn.execute(
                 """
                 INSERT INTO students(student_id, name, father_name, course, phone, valid_until)
                 VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(student_id) DO UPDATE SET
-                    name=excluded.name,
-                    father_name=excluded.father_name,
-                    course=excluded.course,
-                    phone=excluded.phone,
-                    valid_until=excluded.valid_until
                 """,
                 (
                     student["student_id"],
@@ -217,6 +271,8 @@ def import_students_from_csv():
                     student["valid_until"],
                 ),
             )
+
+    return True
 
 
 def import_visits_from_csv():
@@ -248,9 +304,21 @@ def import_visits_from_csv():
 
 def ensure_database_ready():
     initialize_database()
-    if not import_students_from_excel():
-        import_students_from_csv()
-    import_visits_from_csv()
+    student_signature = _students_source_signature()
+
+    with get_connection() as conn:
+        current_signature = _get_sync_state(conn, "students_source_signature")
+        student_count = conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]
+        visits_count = conn.execute("SELECT COUNT(*) FROM visits").fetchone()[0]
+
+    if student_signature and (student_count == 0 or current_signature != student_signature):
+        imported = import_students_from_excel() or import_students_from_csv()
+        if imported:
+            with get_connection() as conn:
+                _set_sync_state(conn, "students_source_signature", student_signature)
+
+    if visits_count == 0:
+        import_visits_from_csv()
 
 
 def fetch_students():
