@@ -3,6 +3,7 @@ import hmac
 import json
 import os
 import secrets
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import datetime, timedelta
 
 from library_app.config import (
@@ -12,12 +13,11 @@ from library_app.config import (
     DEFAULT_ADMIN_USERNAME,
 )
 
-
-SESSIONS = {}
 PASSWORD_RESET_OTP = {}
 PASSWORD_HASH_PREFIX = "pbkdf2_sha256"
 PASSWORD_HASH_ITERATIONS = 390000
 SESSION_TIMEOUT = timedelta(hours=8)
+SESSION_TOKEN_VERSION = 1
 
 
 def _default_credentials():
@@ -66,6 +66,28 @@ def verify_password(password, password_hash):
 def _write_credentials(payload):
     ADMIN_CONFIG_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return payload
+
+
+def _b64_encode(value):
+    return urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _b64_decode(value):
+    padding = "=" * (-len(value) % 4)
+    return urlsafe_b64decode(f"{value}{padding}".encode("ascii"))
+
+
+def _session_secret():
+    explicit_secret = os.environ.get("LIBRARY_SESSION_SECRET", "").strip()
+    if explicit_secret:
+        return explicit_secret.encode("utf-8")
+
+    credentials = load_admin_credentials()
+    return credentials.get("password_hash", DEFAULT_ADMIN_PASSWORD).encode("utf-8")
+
+
+def _sign_session_payload(payload_bytes):
+    return hmac.new(_session_secret(), payload_bytes, hashlib.sha256).hexdigest()
 
 
 def verify_admin_password(password, credentials):
@@ -136,32 +158,53 @@ def load_admin_credentials():
 
 
 def create_session(username):
-    session_id = secrets.token_urlsafe(24)
-    SESSIONS[session_id] = {
-        "username": username,
-        "expires_at": datetime.now() + SESSION_TIMEOUT,
+    payload = {
+        "v": SESSION_TOKEN_VERSION,
+        "u": username,
+        "exp": int((datetime.now() + SESSION_TIMEOUT).timestamp()),
     }
-    return session_id
+    payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    signature = _sign_session_payload(payload_bytes)
+    return f"{_b64_encode(payload_bytes)}.{signature}"
 
 
 def remove_session(session_id):
-    if session_id:
-        SESSIONS.pop(session_id, None)
+    return None
 
 
 def is_authenticated(session_id):
     if not session_id:
         return False
 
-    session = SESSIONS.get(session_id)
-    if not session:
+    try:
+        payload_b64, signature = session_id.split(".", 1)
+        payload_bytes = _b64_decode(payload_b64)
+    except (ValueError, TypeError):
         return False
 
-    if datetime.now() > session["expires_at"]:
-        SESSIONS.pop(session_id, None)
+    expected_signature = _sign_session_payload(payload_bytes)
+    if not hmac.compare_digest(signature, expected_signature):
         return False
 
-    return True
+    try:
+        payload = json.loads(payload_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+
+    if payload.get("v") != SESSION_TOKEN_VERSION:
+        return False
+    if not payload.get("u"):
+        return False
+
+    expires_at = payload.get("exp")
+    if not isinstance(expires_at, int):
+        return False
+
+    if datetime.now().timestamp() > expires_at:
+        return False
+
+    credentials = load_admin_credentials()
+    return payload["u"] == credentials["username"]
 
 
 def save_admin_credentials(username, password, email):

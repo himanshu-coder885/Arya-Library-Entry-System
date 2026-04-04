@@ -81,7 +81,6 @@ class LibraryAppTestCase(unittest.TestCase):
             active_patch.start()
             self.addCleanup(active_patch.stop)
 
-        auth.SESSIONS.clear()
         auth.PASSWORD_RESET_OTP.clear()
         self.client = api_index.app.test_client()
 
@@ -105,10 +104,10 @@ class LibraryAppTestCase(unittest.TestCase):
         )
         self.assertEqual(login_response.status_code, 200)
 
-        with patch.object(data_store, "DUPLICATE_SCAN_GAP_SECONDS", 1):
+        with patch.object(data_store, "DUPLICATE_SCAN_GAP_SECONDS", 3):
             first = self.client.post("/api/scan", json={"student_id": "LIB001"})
             second = self.client.post("/api/scan", json={"student_id": "LIB001"})
-            time.sleep(1.1)
+            time.sleep(3.1)
             third = self.client.post("/api/scan", json={"student_id": "LIB001"})
 
         self.assertEqual(first.status_code, 200)
@@ -131,6 +130,16 @@ class LibraryAppTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertFalse(auth.PASSWORD_RESET_OTP)
         self.assertEqual(response.json["admin_email"], "ad***@example.com")
+
+    def test_session_token_is_stateless(self):
+        login_response = self.client.post(
+            "/api/login",
+            json={"username": "adminuser", "password": "Secret123"},
+        )
+
+        self.assertEqual(login_response.status_code, 200)
+        session_cookie = login_response.headers["Set-Cookie"].split(";", 1)[0].split("=", 1)[1]
+        self.assertTrue(auth.is_authenticated(session_cookie))
 
 
 if __name__ == "__main__":

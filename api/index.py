@@ -1,5 +1,6 @@
 import csv
 import io
+import os
 from datetime import datetime, timedelta
 
 from flask import Flask, jsonify, make_response, redirect, request, send_file
@@ -270,7 +271,14 @@ def login_api():
         return jsonify({"ok": False, "message": "Invalid librarian credentials."}), 401
     session_id = create_session(username)
     response = jsonify({"ok": True, "message": "Login successful."})
-    response.set_cookie("library_session", session_id, httponly=True, samesite="Lax", path="/")
+    response.set_cookie(
+        "library_session",
+        session_id,
+        httponly=True,
+        samesite="Lax",
+        secure=request.is_secure or bool(os.environ.get("VERCEL")),
+        path="/",
+    )
     return response
 
 
