@@ -141,6 +141,28 @@ class LibraryAppTestCase(unittest.TestCase):
         session_cookie = login_response.headers["Set-Cookie"].split(";", 1)[0].split("=", 1)[1]
         self.assertTrue(auth.is_authenticated(session_cookie))
 
+    def test_session_token_stays_valid_with_env_credentials(self):
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "LIBRARY_ADMIN_USERNAME": "envadmin",
+                    "LIBRARY_ADMIN_PASSWORD": "EnvSecret123",
+                    "LIBRARY_ADMIN_EMAIL": "envadmin@example.com",
+                },
+                clear=False,
+            ),
+        ):
+            client = api_index.app.test_client()
+            login_response = client.post(
+                "/api/login",
+                json={"username": "envadmin", "password": "EnvSecret123"},
+            )
+
+            self.assertEqual(login_response.status_code, 200)
+            session_cookie = login_response.headers["Set-Cookie"].split(";", 1)[0].split("=", 1)[1]
+            self.assertTrue(auth.is_authenticated(session_cookie))
+
 
 if __name__ == "__main__":
     unittest.main()

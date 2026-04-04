@@ -82,6 +82,10 @@ def _session_secret():
     if explicit_secret:
         return explicit_secret.encode("utf-8")
 
+    env_password = os.environ.get("LIBRARY_ADMIN_PASSWORD", "")
+    if env_password:
+        return env_password.encode("utf-8")
+
     credentials = load_admin_credentials()
     return credentials.get("password_hash", DEFAULT_ADMIN_PASSWORD).encode("utf-8")
 
@@ -91,6 +95,9 @@ def _sign_session_payload(payload_bytes):
 
 
 def verify_admin_password(password, credentials):
+    env_password = credentials.get("password")
+    if env_password is not None:
+        return hmac.compare_digest(password, env_password)
     return verify_password(password, credentials.get("password_hash", ""))
 
 
@@ -113,7 +120,7 @@ def load_admin_credentials():
     if env_username and env_password:
         return {
             "username": env_username,
-            "password_hash": hash_password(env_password),
+            "password": env_password,
             "email": env_email,
         }
 
