@@ -421,13 +421,18 @@ def ensure_database_ready():
         student_count = _fetchone(conn, "SELECT COUNT(*) AS total FROM students")["total"]
         visits_count = _fetchone(conn, "SELECT COUNT(*) AS total FROM visits")["total"]
 
-    if student_signature and (student_count == 0 or current_signature != student_signature):
+    if student_signature and student_count == 0:
         imported = import_students_from_excel() or import_students_from_csv()
         if imported:
             with get_connection() as conn:
                 _set_sync_state(conn, "students_source_signature", student_signature)
+    elif student_signature and student_count > 0 and current_signature != student_signature:
+        # Existing remote data should not be re-imported on every request. Record the
+        # current source signature once so subsequent requests can use the existing rows.
+        with get_connection() as conn:
+            _set_sync_state(conn, "students_source_signature", student_signature)
 
-    if visits_count == 0:
+    if visits_count == 0 and not _using_postgres():
         import_visits_from_csv()
 
 
