@@ -14,6 +14,7 @@ import library_app.auth as auth
 import library_app.config as config
 import library_app.data_store as data_store
 import library_app.database as database
+import library_app.time_utils as time_utils
 
 
 class FakePsycopgCursor:
@@ -217,6 +218,29 @@ class LibraryAppTestCase(unittest.TestCase):
             self.assertEqual(login_response.status_code, 200)
             session_cookie = login_response.headers["Set-Cookie"].split(";", 1)[0].split("=", 1)[1]
             self.assertTrue(auth.is_authenticated(session_cookie))
+
+    def test_dashboard_api_embeds_report_sections(self):
+        login_response = self.client.post(
+            "/api/login",
+            json={"username": "adminuser", "password": "Secret123"},
+        )
+        self.assertEqual(login_response.status_code, 200)
+
+        scan_response = self.client.post("/api/scan", json={"student_id": "LIB001"})
+        self.assertEqual(scan_response.status_code, 200)
+        self.assertEqual(scan_response.json["action"], "entry")
+
+        dashboard_response = self.client.get("/api/dashboard")
+        self.assertEqual(dashboard_response.status_code, 200)
+
+        payload = dashboard_response.json
+        self.assertIn("daily_summary", payload)
+        self.assertIn("weekly_summary", payload)
+        self.assertEqual(payload["summary"]["today"], time_utils.current_date_text())
+        self.assertEqual(payload["summary"]["student_count"], 1)
+        self.assertEqual(payload["summary"]["today_visits"], 1)
+        self.assertEqual(len(payload["daily_summary"]), 1)
+        self.assertEqual(payload["daily_summary"][0]["date"], time_utils.current_date_text())
 
     def test_postgres_mode_uses_database_url_and_postgres_queries(self):
         fake_connection = FakePsycopgConnection()

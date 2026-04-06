@@ -2,7 +2,6 @@ import csv
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
 
 from library_app.config import (
     BASE_DIR,
@@ -13,6 +12,7 @@ from library_app.config import (
     LIBRARY_DB_FILE,
     VISITS_FILE,
 )
+from library_app.time_utils import current_date_text, current_time_text, now_local
 
 
 def _database_url():
@@ -136,6 +136,8 @@ def initialize_database():
                 )
                 """,
             )
+            _execute(conn, "CREATE INDEX IF NOT EXISTS idx_visits_date ON visits(date)")
+            _execute(conn, "CREATE INDEX IF NOT EXISTS idx_visits_student_date ON visits(student_id, date)")
             return
 
         conn.execute(
@@ -172,6 +174,8 @@ def initialize_database():
             )
             """
         )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_visits_date ON visits(date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_visits_student_date ON visits(student_id, date)")
 
         student_columns = {row["name"] for row in conn.execute("PRAGMA table_info(students)").fetchall()}
         if "father_name" not in student_columns:
@@ -482,14 +486,16 @@ def fetch_visits():
 
 
 def create_visit(student):
-    now = datetime.now()
+    now = now_local()
+    visit_date = now.date().isoformat()
+    entry_time = now.strftime("%H:%M:%S")
     ensure_database_ready()
     params = (
         student["student_id"],
         student["name"],
         student.get("father_name", ""),
-        now.strftime("%Y-%m-%d"),
-        now.strftime("%H:%M:%S"),
+        visit_date,
+        entry_time,
         "",
     )
 
@@ -501,15 +507,15 @@ def create_visit(student):
         "student_id": student["student_id"],
         "name": student["name"],
         "father_name": student.get("father_name", ""),
-        "date": now.strftime("%Y-%m-%d"),
-        "entry_time": now.strftime("%H:%M:%S"),
+        "date": visit_date,
+        "entry_time": entry_time,
         "exit_time": "",
     }
 
 
 def update_visit_exit(student_id, visit_date=None):
-    now = datetime.now()
-    target_date = visit_date or now.strftime("%Y-%m-%d")
+    exit_time = current_time_text()
+    target_date = visit_date or current_date_text()
     ensure_database_ready()
 
     with get_connection() as conn:
@@ -530,7 +536,7 @@ def update_visit_exit(student_id, visit_date=None):
         _execute(
             conn,
             "UPDATE visits SET exit_time = ? WHERE visit_id = ?",
-            (now.strftime("%H:%M:%S"), row["visit_id"]),
+            (exit_time, row["visit_id"]),
         )
 
     return {
@@ -540,5 +546,5 @@ def update_visit_exit(student_id, visit_date=None):
         "father_name": row["father_name"] or "",
         "date": row["date"],
         "entry_time": row["entry_time"],
-        "exit_time": now.strftime("%H:%M:%S"),
+        "exit_time": exit_time,
     }

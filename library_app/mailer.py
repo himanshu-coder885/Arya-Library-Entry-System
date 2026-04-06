@@ -1,10 +1,10 @@
 import json
 import os
 import smtplib
-from datetime import datetime
 from email.message import EmailMessage
 
 from library_app.config import EMAIL_CONFIG_FILE
+from library_app.time_utils import now_local
 
 
 def _parse_bool(value, default=True):
@@ -64,7 +64,7 @@ def send_password_recovery_email(admin_email, requested_username, otp_code):
     message["Subject"] = "Arya Central Library Password Reset OTP"
     message["From"] = f"{config.get('sender_name', 'Arya Central Library')} <{sender_email}>"
     message["To"] = admin_email
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = now_local().strftime("%Y-%m-%d %H:%M:%S")
     body = (
         "A password reset request was submitted for the library dashboard.\n\n"
         f"Username: {requested_username or 'Not provided'}\n"

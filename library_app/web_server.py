@@ -4,7 +4,7 @@ import io
 from urllib.parse import parse_qs, urlparse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from library_app.auth import (
     clear_password_reset_otp,
@@ -37,14 +37,15 @@ from library_app.config import (
     ACE_LOGO_FILE,
 )
 from library_app.data_store import (
-    get_active_visits,
-    get_dashboard_summary,
+    build_dashboard_payload,
+    build_daily_summary,
+    build_weekly_summary,
     get_recent_visits,
     get_students_file,
-    load_students,
     process_scan_result,
 )
 from library_app.mailer import send_password_recovery_email
+from library_app.time_utils import today_local
 from library_app.utils import read_text_file
 
 
@@ -186,36 +187,8 @@ class LibraryDashboardHandler(BaseHTTPRequestHandler):
             if not self._is_authenticated():
                 self._json_response({"ok": False, "message": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
-            students = load_students()
-            today = datetime.now().strftime("%Y-%m-%d")
-            recent_visits = [visit for visit in get_recent_visits(limit=None) if visit["date"] == today][:12]
-            recent_visits_with_students = []
-            for visit in recent_visits:
-                student = students.get(visit["student_id"], {})
-                recent_visits_with_students.append(
-                    {
-                        **visit,
-                        "course": student.get("course", visit.get("course", "")),
-                        "father_name": student.get("father_name", visit.get("father_name", "")),
-                    }
-                )
-            active_visits = []
-            for visit in get_active_visits():
-                student = students.get(visit["student_id"], {})
-                active_visits.append(
-                    {
-                        **visit,
-                        "course": student.get("course", visit.get("course", "")),
-                        "father_name": student.get("father_name", visit.get("father_name", "")),
-                    }
-                )
-            payload = {
-                "summary": get_dashboard_summary(),
-                "recent_visits": recent_visits,
-                "recent_visits_with_students": recent_visits_with_students,
-                "active_visits": active_visits,
-                "student_file": get_students_file().name,
-            }
+            payload = build_dashboard_payload(recent_limit=12)
+            payload["student_file"] = get_students_file().name
             self._json_response(payload)
             return
 
@@ -224,25 +197,7 @@ class LibraryDashboardHandler(BaseHTTPRequestHandler):
                 self._json_response({"ok": False, "message": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
 
-            visits = get_recent_visits(limit=None)
-            summary_map = {}
-            for visit in visits:
-                date_key = visit["date"]
-                if date_key not in summary_map:
-                    summary_map[date_key] = {
-                        "date": date_key,
-                        "total_visits": 0,
-                        "completed_visits": 0,
-                        "inside_count": 0,
-                    }
-                summary_map[date_key]["total_visits"] += 1
-                if visit["exit_time"].strip():
-                    summary_map[date_key]["completed_visits"] += 1
-                else:
-                    summary_map[date_key]["inside_count"] += 1
-
-            summary_rows = sorted(summary_map.values(), key=lambda item: item["date"], reverse=True)
-            self._json_response({"summary": summary_rows})
+            self._json_response({"summary": build_daily_summary(get_recent_visits(limit=None))})
             return
 
         if path == "/api/export-visits":
@@ -303,39 +258,7 @@ class LibraryDashboardHandler(BaseHTTPRequestHandler):
                 self._json_response({"ok": False, "message": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
 
-            visits = get_recent_visits(limit=None)
-            summary_map = {}
-            today = datetime.now().date()
-            for visit in visits:
-                visit_date = datetime.strptime(visit["date"], "%Y-%m-%d").date()
-                iso_year, iso_week, iso_day = visit_date.isocalendar()
-                week_key = f"{iso_year}-W{iso_week:02d}"
-                start_date = visit_date - timedelta(days=iso_day - 1)
-                end_date = start_date + timedelta(days=6)
-
-                if week_key not in summary_map:
-                    summary_map[week_key] = {
-                        "week_label": week_key,
-                        "start_date": start_date.isoformat(),
-                        "end_date": end_date.isoformat(),
-                        "total_visits": 0,
-                        "completed_visits": 0,
-                        "inside_count": 0,
-                        "is_completed": end_date < today,
-                    }
-
-                summary_map[week_key]["total_visits"] += 1
-                if visit["exit_time"].strip():
-                    summary_map[week_key]["completed_visits"] += 1
-                else:
-                    summary_map[week_key]["inside_count"] += 1
-
-            summary_rows = [
-                item
-                for item in sorted(summary_map.values(), key=lambda entry: entry["week_label"], reverse=True)
-                if item["is_completed"]
-            ]
-            self._json_response({"summary": summary_rows})
+            self._json_response({"summary": build_weekly_summary(get_recent_visits(limit=None), today=today_local())})
             return
 
         self._json_response({"ok": False, "message": "Not found"}, status=HTTPStatus.NOT_FOUND)

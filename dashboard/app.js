@@ -181,22 +181,8 @@ async function loadDashboard() {
   renderStats(data.summary);
   renderRecent(data.recent_visits_with_students || data.recent_visits);
   renderInside(data.active_visits);
-
-  const summaryResponse = await fetch("/api/daily-summary");
-  if (summaryResponse.status === 401) {
-    window.location.href = "/";
-    return;
-  }
-  const summaryData = await summaryResponse.json();
-  renderDailySummary(summaryData.summary || []);
-
-  const weeklyResponse = await fetch("/api/weekly-summary");
-  if (weeklyResponse.status === 401) {
-    window.location.href = "/";
-    return;
-  }
-  const weeklyData = await weeklyResponse.json();
-  renderWeeklySummary(weeklyData.summary || []);
+  renderDailySummary(data.daily_summary || []);
+  renderWeeklySummary(data.weekly_summary || []);
 }
 
 async function submitScan(studentId) {

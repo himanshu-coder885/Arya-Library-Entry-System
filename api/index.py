@@ -1,7 +1,7 @@
 import csv
 import io
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from flask import Flask, jsonify, make_response, redirect, request, send_file
 
@@ -34,14 +34,15 @@ from library_app.config import (
     WEEKLY_REPORT_HTML_FILE,
 )
 from library_app.data_store import (
-    get_active_visits,
-    get_dashboard_summary,
+    build_dashboard_payload,
+    build_daily_summary,
+    build_weekly_summary,
     get_recent_visits,
     get_students_file,
-    load_students,
     process_scan_result,
 )
 from library_app.mailer import send_password_recovery_email
+from library_app.time_utils import today_local
 from library_app.utils import read_text_file
 
 
@@ -54,21 +55,6 @@ def is_logged_in():
 
 def unauthorized():
     return jsonify({"ok": False, "message": "Unauthorized"}), 401
-
-
-def with_student_details(visits):
-    students = load_students()
-    rows = []
-    for visit in visits:
-        student = students.get(visit["student_id"], {})
-        rows.append(
-            {
-                **visit,
-                "course": student.get("course", visit.get("course", "")),
-                "father_name": student.get("father_name", visit.get("father_name", "")),
-            }
-        )
-    return rows
 
 
 @app.get("/")
@@ -160,15 +146,8 @@ def ace_logo_file():
 def dashboard_api():
     if not is_logged_in():
         return unauthorized()
-    today = datetime.now().strftime("%Y-%m-%d")
-    recent_visits = [visit for visit in get_recent_visits(limit=None) if visit["date"] == today][:12]
-    payload = {
-        "summary": get_dashboard_summary(),
-        "recent_visits": recent_visits,
-        "recent_visits_with_students": with_student_details(recent_visits),
-        "active_visits": with_student_details(get_active_visits()),
-        "student_file": get_students_file().name,
-    }
+    payload = build_dashboard_payload(recent_limit=12)
+    payload["student_file"] = get_students_file().name
     return jsonify(payload)
 
 
@@ -176,53 +155,14 @@ def dashboard_api():
 def daily_summary_api():
     if not is_logged_in():
         return unauthorized()
-    visits = get_recent_visits(limit=None)
-    summary_map = {}
-    for visit in visits:
-        row = summary_map.setdefault(
-            visit["date"],
-            {"date": visit["date"], "total_visits": 0, "completed_visits": 0, "inside_count": 0},
-        )
-        row["total_visits"] += 1
-        if visit["exit_time"].strip():
-            row["completed_visits"] += 1
-        else:
-            row["inside_count"] += 1
-    return jsonify({"summary": sorted(summary_map.values(), key=lambda item: item["date"], reverse=True)})
+    return jsonify({"summary": build_daily_summary(get_recent_visits(limit=None))})
 
 
 @app.get("/api/weekly-summary")
 def weekly_summary_api():
     if not is_logged_in():
         return unauthorized()
-    visits = get_recent_visits(limit=None)
-    summary_map = {}
-    today = datetime.now().date()
-    for visit in visits:
-        visit_date = datetime.strptime(visit["date"], "%Y-%m-%d").date()
-        iso_year, iso_week, iso_day = visit_date.isocalendar()
-        week_key = f"{iso_year}-W{iso_week:02d}"
-        start_date = visit_date - timedelta(days=iso_day - 1)
-        end_date = start_date + timedelta(days=6)
-        row = summary_map.setdefault(
-            week_key,
-            {
-                "week_label": week_key,
-                "start_date": start_date.isoformat(),
-                "end_date": end_date.isoformat(),
-                "total_visits": 0,
-                "completed_visits": 0,
-                "inside_count": 0,
-                "is_completed": end_date < today,
-            },
-        )
-        row["total_visits"] += 1
-        if visit["exit_time"].strip():
-            row["completed_visits"] += 1
-        else:
-            row["inside_count"] += 1
-    rows = [item for item in sorted(summary_map.values(), key=lambda item: item["week_label"], reverse=True) if item["is_completed"]]
-    return jsonify({"summary": rows})
+    return jsonify({"summary": build_weekly_summary(get_recent_visits(limit=None), today=today_local())})
 
 
 @app.get("/api/export-visits")

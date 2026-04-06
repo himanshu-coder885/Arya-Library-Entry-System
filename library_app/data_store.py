@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from library_app.config import (
     DEFAULT_STUDENTS_FILE,
@@ -9,6 +9,7 @@ from library_app.config import (
     VISITS_FILE,
 )
 from library_app.database import create_visit, ensure_database_ready, fetch_students, fetch_visits, update_visit_exit
+from library_app.time_utils import current_date_text, now_local, parse_local_timestamp, today_local
 
 
 def get_students_file():
@@ -55,7 +56,7 @@ def is_membership_valid(student):
     except ValueError:
         return False, "Student date format invalid"
 
-    today = datetime.now().date()
+    today = today_local()
     if today > expiry_date:
         return False, f"ID expired on {expiry_date.isoformat()}"
 
@@ -74,12 +75,7 @@ def find_open_visit(visits, student_id, visit_date):
 
 
 def parse_timestamp(date_text, time_text):
-    if not date_text or not time_text:
-        return None
-    try:
-        return datetime.strptime(f"{date_text} {time_text}", "%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        return None
+    return parse_local_timestamp(date_text, time_text)
 
 
 def get_last_scan_timestamp(visits, student_id):
@@ -99,8 +95,8 @@ def process_scan_result(student_id):
     student_id = str(student_id).strip()
     students = load_students()
     visits = load_visits()
-    now = datetime.now()
-    today = now.strftime("%Y-%m-%d")
+    now = now_local()
+    today = now.date().isoformat()
 
     if student_id not in students:
         return {
@@ -124,6 +120,8 @@ def process_scan_result(student_id):
 
     last_scan_timestamp = get_last_scan_timestamp(visits, student_id)
     if last_scan_timestamp is not None:
+        if last_scan_timestamp.tzinfo is None:
+            last_scan_timestamp = last_scan_timestamp.replace(tzinfo=now.tzinfo)
         elapsed = (now - last_scan_timestamp).total_seconds()
         # A future timestamp can happen if an older record was written with a mismatched
         # server clock or timezone. In that case, don't turn it into a nonsense cooldown.
@@ -184,14 +182,14 @@ def get_recent_visits(limit=10):
 
 
 def get_active_visits():
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = current_date_text()
     return [visit for visit in load_visits() if visit["date"] == today and not visit["exit_time"].strip()]
 
 
 def get_dashboard_summary():
     students = load_students()
     visits = load_visits()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = current_date_text()
     active_visits = [visit for visit in visits if visit["date"] == today and not visit["exit_time"].strip()]
     today_visits = [visit for visit in visits if visit["date"] == today]
 
@@ -201,4 +199,89 @@ def get_dashboard_summary():
         "today_visits": len(today_visits),
         "inside_count": len(active_visits),
         "today": today,
+    }
+
+
+def with_student_details(visits, students=None):
+    student_map = students if students is not None else load_students()
+    return [
+        {
+            **visit,
+            "course": student_map.get(visit["student_id"], {}).get("course", visit.get("course", "")),
+            "father_name": student_map.get(visit["student_id"], {}).get("father_name", visit.get("father_name", "")),
+        }
+        for visit in visits
+    ]
+
+
+def build_daily_summary(visits):
+    summary_map = {}
+    for visit in visits:
+        row = summary_map.setdefault(
+            visit["date"],
+            {"date": visit["date"], "total_visits": 0, "completed_visits": 0, "inside_count": 0},
+        )
+        row["total_visits"] += 1
+        if visit["exit_time"].strip():
+            row["completed_visits"] += 1
+        else:
+            row["inside_count"] += 1
+    return sorted(summary_map.values(), key=lambda item: item["date"], reverse=True)
+
+
+def build_weekly_summary(visits, today=None):
+    summary_map = {}
+    current_day = today or today_local()
+    for visit in visits:
+        visit_date = datetime.strptime(visit["date"], "%Y-%m-%d").date()
+        iso_year, iso_week, iso_day = visit_date.isocalendar()
+        week_key = f"{iso_year}-W{iso_week:02d}"
+        start_date = visit_date - timedelta(days=iso_day - 1)
+        end_date = start_date + timedelta(days=6)
+        row = summary_map.setdefault(
+            week_key,
+            {
+                "week_label": week_key,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "total_visits": 0,
+                "completed_visits": 0,
+                "inside_count": 0,
+                "is_completed": end_date < current_day,
+            },
+        )
+        row["total_visits"] += 1
+        if visit["exit_time"].strip():
+            row["completed_visits"] += 1
+        else:
+            row["inside_count"] += 1
+    return [
+        item
+        for item in sorted(summary_map.values(), key=lambda item: item["week_label"], reverse=True)
+        if item["is_completed"]
+    ]
+
+
+def build_dashboard_payload(recent_limit=12):
+    students = load_students()
+    visits = load_visits()
+    today = current_date_text()
+    recent_visits = [visit for visit in reversed(visits) if visit["date"] == today][:recent_limit]
+    active_visits = [visit for visit in visits if visit["date"] == today and not visit["exit_time"].strip()]
+    daily_summary = build_daily_summary(visits)
+    weekly_summary = build_weekly_summary(visits)
+
+    return {
+        "summary": {
+            "student_count": len(students),
+            "total_visits": len(visits),
+            "today_visits": sum(1 for visit in visits if visit["date"] == today),
+            "inside_count": len(active_visits),
+            "today": today,
+        },
+        "recent_visits": recent_visits,
+        "recent_visits_with_students": with_student_details(recent_visits, students),
+        "active_visits": with_student_details(active_visits, students),
+        "daily_summary": daily_summary,
+        "weekly_summary": weekly_summary,
     }

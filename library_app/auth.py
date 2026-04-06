@@ -4,7 +4,7 @@ import json
 import os
 import secrets
 from base64 import urlsafe_b64decode, urlsafe_b64encode
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from library_app.config import (
     ADMIN_CONFIG_FILE,
@@ -12,6 +12,7 @@ from library_app.config import (
     DEFAULT_ADMIN_PASSWORD,
     DEFAULT_ADMIN_USERNAME,
 )
+from library_app.time_utils import now_utc
 
 PASSWORD_RESET_OTP = {}
 PASSWORD_HASH_PREFIX = "pbkdf2_sha256"
@@ -168,7 +169,7 @@ def create_session(username):
     payload = {
         "v": SESSION_TOKEN_VERSION,
         "u": username,
-        "exp": int((datetime.now() + SESSION_TIMEOUT).timestamp()),
+        "exp": int((now_utc() + SESSION_TIMEOUT).timestamp()),
     }
     payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     signature = _sign_session_payload(payload_bytes)
@@ -207,7 +208,7 @@ def is_authenticated(session_id):
     if not isinstance(expires_at, int):
         return False
 
-    if datetime.now().timestamp() > expires_at:
+    if now_utc().timestamp() > expires_at:
         return False
 
     credentials = load_admin_credentials()
@@ -230,7 +231,7 @@ def create_password_reset_otp():
 def store_password_reset_otp(username, code):
     PASSWORD_RESET_OTP[username] = {
         "code": code,
-        "expires_at": datetime.now() + timedelta(minutes=10),
+        "expires_at": now_utc() + timedelta(minutes=10),
     }
 
 
@@ -238,7 +239,7 @@ def verify_password_reset_otp(username, code):
     otp_data = PASSWORD_RESET_OTP.get(username)
     if not otp_data:
         return False, "No OTP request found for this username."
-    if datetime.now() > otp_data["expires_at"]:
+    if now_utc() > otp_data["expires_at"]:
         PASSWORD_RESET_OTP.pop(username, None)
         return False, "OTP expired. Please request a new one."
     if str(code).strip() != otp_data["code"]:

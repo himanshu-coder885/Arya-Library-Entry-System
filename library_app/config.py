@@ -41,6 +41,7 @@ VISIT_FIELDS = [
 
 HOST = "127.0.0.1"
 PORT = 8000
+APP_TIMEZONE = os.environ.get("LIBRARY_TIMEZONE", "Asia/Kolkata").strip() or "Asia/Kolkata"
 
 HTML_FILE = DASHBOARD_DIR / "index.html"
 LOGIN_HTML_FILE = DASHBOARD_DIR / "login.html"
