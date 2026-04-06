@@ -5,6 +5,7 @@ import tempfile
 import time
 import types
 import unittest
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -242,6 +243,46 @@ class LibraryAppTestCase(unittest.TestCase):
         self.assertIn("%s", executed_queries)
         self.assertTrue(fake_connection.committed)
         self.assertTrue(fake_connection.closed)
+
+    def test_future_last_scan_timestamp_does_not_trigger_broken_duplicate_message(self):
+        future_timestamp = data_store.datetime.now() + timedelta(hours=5, minutes=7)
+
+        with (
+            patch.object(
+                data_store,
+                "load_students",
+                return_value={
+                    "LIB001": {
+                        "student_id": "LIB001",
+                        "name": "Test Student",
+                        "father_name": "Test Father",
+                        "course": "BCA",
+                        "phone": "",
+                        "valid_until": "",
+                    }
+                },
+            ),
+            patch.object(data_store, "load_visits", return_value=[]),
+            patch.object(data_store, "get_last_scan_timestamp", return_value=future_timestamp),
+            patch.object(
+                data_store,
+                "create_visit",
+                return_value={
+                    "visit_id": "00001",
+                    "student_id": "LIB001",
+                    "name": "Test Student",
+                    "father_name": "Test Father",
+                    "date": "2026-04-06",
+                    "entry_time": "10:00:00",
+                    "exit_time": "",
+                },
+            ),
+            patch.object(data_store, "save_visits"),
+        ):
+            result = data_store.process_scan_result("LIB001")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "entry")
 
 
 if __name__ == "__main__":

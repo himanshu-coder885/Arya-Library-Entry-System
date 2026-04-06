@@ -125,7 +125,11 @@ def process_scan_result(student_id):
     last_scan_timestamp = get_last_scan_timestamp(visits, student_id)
     if last_scan_timestamp is not None:
         elapsed = (now - last_scan_timestamp).total_seconds()
-        if elapsed < DUPLICATE_SCAN_GAP_SECONDS:
+        # A future timestamp can happen if an older record was written with a mismatched
+        # server clock or timezone. In that case, don't turn it into a nonsense cooldown.
+        if elapsed < 0:
+            elapsed = None
+        if elapsed is not None and elapsed < DUPLICATE_SCAN_GAP_SECONDS:
             return {
                 "ok": False,
                 "message": f"Duplicate scan ignored. Try again after {int(DUPLICATE_SCAN_GAP_SECONDS - elapsed) + 1} seconds.",
