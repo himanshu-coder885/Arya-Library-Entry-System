@@ -137,6 +137,9 @@ class LibraryAppTestCase(unittest.TestCase):
             active_patch.start()
             self.addCleanup(active_patch.stop)
 
+        database._DATABASE_READY = False
+        data_store._STUDENT_CACHE = {}
+        data_store._STUDENT_CACHE_SIGNATURE = ""
         auth.PASSWORD_RESET_OTP.clear()
         self.client = api_index.app.test_client()
 
@@ -241,6 +244,22 @@ class LibraryAppTestCase(unittest.TestCase):
         self.assertEqual(payload["summary"]["today_visits"], 1)
         self.assertEqual(len(payload["daily_summary"]), 1)
         self.assertEqual(payload["daily_summary"][0]["date"], time_utils.current_date_text())
+
+    def test_export_visits_returns_csv(self):
+        login_response = self.client.post(
+            "/api/login",
+            json={"username": "adminuser", "password": "Secret123"},
+        )
+        self.assertEqual(login_response.status_code, 200)
+
+        scan_response = self.client.post("/api/scan", json={"student_id": "LIB001"})
+        self.assertEqual(scan_response.status_code, 200)
+
+        export_response = self.client.get("/api/export-visits")
+        self.assertEqual(export_response.status_code, 200)
+        self.assertEqual(export_response.headers["Content-Type"], "text/csv; charset=utf-8")
+        self.assertIn("attachment; filename=", export_response.headers["Content-Disposition"])
+        self.assertIn("student_id,name,father_name,branch,date,entry_time,exit_time", export_response.get_data(as_text=True))
 
     def test_postgres_mode_uses_database_url_and_postgres_queries(self):
         fake_connection = FakePsycopgConnection()

@@ -1,3 +1,5 @@
+import csv
+import threading
 from datetime import datetime, timedelta
 
 from library_app.config import (
@@ -8,8 +10,132 @@ from library_app.config import (
     VISIT_FIELDS,
     VISITS_FILE,
 )
-from library_app.database import create_visit, ensure_database_ready, fetch_students, fetch_visits, update_visit_exit
+from library_app.database import (
+    create_visit,
+    ensure_database_ready,
+    fetch_open_visit,
+    fetch_latest_visit_for_student,
+    fetch_visits,
+    update_visit_exit,
+    using_postgres,
+)
 from library_app.time_utils import current_date_text, now_local, parse_local_timestamp, today_local
+
+_STUDENT_CACHE = {}
+_STUDENT_CACHE_SIGNATURE = ""
+_STUDENT_CACHE_LOCK = threading.Lock()
+
+
+def _file_signature(path):
+    if not path.exists():
+        return ""
+    stat = path.stat()
+    return f"{path.resolve()}::{stat.st_size}::{stat.st_mtime_ns}"
+
+
+def _excel_source_files():
+    base_dir = EXCEL_STUDENTS_FILE.parent
+    preferred = []
+    if EXCEL_STUDENTS_FILE.exists():
+        preferred.append(EXCEL_STUDENTS_FILE)
+    others = sorted([path for path in base_dir.glob("*.xlsx") if path.name != EXCEL_STUDENTS_FILE.name])
+    return preferred + others
+
+
+def _students_source_signature():
+    excel_files = [path for path in _excel_source_files() if path.exists()]
+    if excel_files:
+        return "|".join(_file_signature(path) for path in excel_files)
+    return _file_signature(get_students_file())
+
+
+def _normalize_student_row(row):
+    return {
+        "student_id": (row.get("student_id") or row.get("Student ID") or "").strip(),
+        "name": (row.get("name") or row.get("Name") or "").strip(),
+        "father_name": (row.get("father_name") or row.get("Father Name") or row.get("FATHER NAME") or "").strip(),
+        "course": (
+            row.get("course")
+            or row.get("Course")
+            or row.get("coursev1")
+            or row.get("Coursev1")
+            or row.get("branch")
+            or row.get("Branch")
+            or ""
+        ).strip(),
+        "phone": (row.get("phone") or row.get("Phone") or "").strip(),
+        "valid_until": (row.get("valid_until") or row.get("Valid Until") or "").strip(),
+    }
+
+
+def _load_students_from_excel():
+    from openpyxl import load_workbook
+
+    students = {}
+    for excel_file in _excel_source_files():
+        workbook = load_workbook(excel_file, read_only=True, data_only=True)
+        try:
+            for sheet_name in workbook.sheetnames:
+                worksheet = workbook[sheet_name]
+                rows = worksheet.iter_rows(values_only=True)
+                headers = None
+                for row in rows:
+                    values = [str(cell).strip() if cell is not None else "" for cell in row]
+                    if not any(values):
+                        continue
+                    normalized = [value.lower() for value in values]
+                    if headers is None:
+                        if (
+                            ("name" in normalized or "name " in normalized or "studente name" in normalized or "students name" in normalized)
+                            and "branch" in normalized
+                            and "code" in normalized
+                        ):
+                            headers = values
+                        continue
+
+                    row_map = dict(zip(headers, values))
+                    student_id = str(row_map.get("CODE", "")).strip()
+                    name = str(
+                        row_map.get("Name ", "")
+                        or row_map.get("Name", "")
+                        or row_map.get("STUDENTE NAME", "")
+                        or row_map.get("Students Name", "")
+                    ).strip()
+                    if not student_id or not name:
+                        continue
+                    students[student_id] = {
+                        "student_id": student_id,
+                        "name": name,
+                        "father_name": str(row_map.get("FATHER NAME", "") or row_map.get("Father Name", "")).strip(),
+                        "course": str(row_map.get("BRANCH", "") or row_map.get("Branch", "")).strip(),
+                        "phone": "",
+                        "valid_until": "",
+                    }
+        finally:
+            workbook.close()
+    return students
+
+
+def _load_students_from_csv():
+    students = {}
+    source = get_students_file()
+    if source.suffix.lower() == ".xlsx" or not source.exists():
+        return students
+    with source.open("r", newline="", encoding="utf-8-sig") as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            student = _normalize_student_row(row)
+            if not student["student_id"]:
+                continue
+            students[student["student_id"]] = student
+    return students
+
+
+def _load_students_from_source():
+    excel_files = [path for path in _excel_source_files() if path.exists()]
+    if excel_files:
+        return _load_students_from_excel()
+    return _load_students_from_csv()
 
 
 def get_students_file():
@@ -29,7 +155,20 @@ def ensure_visits_file():
 
 
 def load_students():
-    return fetch_students()
+    global _STUDENT_CACHE
+    global _STUDENT_CACHE_SIGNATURE
+
+    signature = _students_source_signature()
+    if signature and signature == _STUDENT_CACHE_SIGNATURE and _STUDENT_CACHE:
+        return _STUDENT_CACHE
+
+    with _STUDENT_CACHE_LOCK:
+        signature = _students_source_signature()
+        if signature and signature == _STUDENT_CACHE_SIGNATURE and _STUDENT_CACHE:
+            return _STUDENT_CACHE
+        _STUDENT_CACHE = _load_students_from_source()
+        _STUDENT_CACHE_SIGNATURE = signature
+        return _STUDENT_CACHE
 
 
 def load_visits():
@@ -93,12 +232,11 @@ def get_last_scan_timestamp(visits, student_id):
 
 def process_scan_result(student_id):
     student_id = str(student_id).strip()
-    students = load_students()
-    visits = load_visits()
     now = now_local()
     today = now.date().isoformat()
+    student = load_students().get(student_id)
 
-    if student_id not in students:
+    if student is None:
         return {
             "ok": False,
             "message": f"Student ID not found: {student_id}",
@@ -107,7 +245,6 @@ def process_scan_result(student_id):
             "action": "not_found",
         }
 
-    student = students[student_id]
     is_valid, reason = is_membership_valid(student)
     if not is_valid:
         return {
@@ -118,7 +255,12 @@ def process_scan_result(student_id):
             "action": "invalid",
         }
 
-    last_scan_timestamp = get_last_scan_timestamp(visits, student_id)
+    last_visit = fetch_latest_visit_for_student(student_id)
+    last_scan_timestamp = None
+    if last_visit is not None:
+        last_scan_timestamp = parse_timestamp(last_visit["date"], last_visit["exit_time"]) or parse_timestamp(
+            last_visit["date"], last_visit["entry_time"]
+        )
     if last_scan_timestamp is not None:
         if last_scan_timestamp.tzinfo is None:
             last_scan_timestamp = last_scan_timestamp.replace(tzinfo=now.tzinfo)
@@ -136,11 +278,12 @@ def process_scan_result(student_id):
                 "action": "duplicate",
             }
 
-    open_visit = find_open_visit(visits, student_id, today)
+    open_visit = fetch_open_visit(student_id, today)
 
     if open_visit is None:
         visit = create_visit(student)
-        save_visits(load_visits())
+        if not using_postgres():
+            save_visits(load_visits())
         return {
             "ok": True,
             "message": f"Entry saved: {student['name']} ({student['student_id']})",
@@ -158,7 +301,8 @@ def process_scan_result(student_id):
             "visit": None,
             "action": "error",
         }
-    save_visits(load_visits())
+    if not using_postgres():
+        save_visits(load_visits())
     return {
         "ok": True,
         "message": f"Exit saved: {student['name']} ({student['student_id']})",

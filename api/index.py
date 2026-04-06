@@ -39,6 +39,7 @@ from library_app.data_store import (
     build_weekly_summary,
     get_recent_visits,
     get_students_file,
+    load_students,
     process_scan_result,
 )
 from library_app.mailer import send_password_recovery_email

@@ -26,6 +26,7 @@ const logoutBtn = document.getElementById("logoutBtn");
 const downloadVisitsBtn = document.getElementById("downloadVisitsBtn");
 const backTopButtons = document.querySelectorAll('[data-back-top="true"]');
 const backAdminButtons = document.querySelectorAll('[data-back-admin="true"]');
+const DASHBOARD_CACHE_KEY = "arya-library-dashboard-cache-v1";
 
 let cameraStream = null;
 let detector = null;
@@ -171,6 +172,33 @@ function setFeedback(message, type = "") {
   feedback.className = `feedback ${type}`.trim();
 }
 
+function renderDashboardData(data) {
+  if (!data) {
+    return;
+  }
+  renderStats(data.summary || {});
+  renderRecent(data.recent_visits_with_students || data.recent_visits || []);
+  renderInside(data.active_visits || []);
+  renderDailySummary(data.daily_summary || []);
+  renderWeeklySummary(data.weekly_summary || []);
+}
+
+function readDashboardCache() {
+  try {
+    const raw = window.sessionStorage.getItem(DASHBOARD_CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function writeDashboardCache(data) {
+  try {
+    window.sessionStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify(data));
+  } catch (error) {
+  }
+}
+
 async function loadDashboard() {
   const response = await fetch("/api/dashboard");
   if (response.status === 401) {
@@ -178,11 +206,8 @@ async function loadDashboard() {
     return;
   }
   const data = await response.json();
-  renderStats(data.summary);
-  renderRecent(data.recent_visits_with_students || data.recent_visits);
-  renderInside(data.active_visits);
-  renderDailySummary(data.daily_summary || []);
-  renderWeeklySummary(data.weekly_summary || []);
+  writeDashboardCache(data);
+  renderDashboardData(data);
 }
 
 async function submitScan(studentId) {
@@ -484,11 +509,20 @@ if (backAdminButtons.length) {
   });
 }
 
+const cachedDashboard = readDashboardCache();
+if (cachedDashboard) {
+  renderDashboardData(cachedDashboard);
+}
+
 loadDashboard().then(() => {
   setFeedback("Dashboard ready. Scan box focused for next student.", "ok");
   if (studentIdInput) {
     studentIdInput.focus();
   }
 }).catch(() => {
+  if (cachedDashboard) {
+    setFeedback("Showing cached dashboard data while live refresh failed.", "error");
+    return;
+  }
   setFeedback("Dashboard load failed. Please restart the web server.", "error");
 });

@@ -14,6 +14,8 @@ from library_app.config import (
 )
 from library_app.time_utils import current_date_text, current_time_text, now_local
 
+_DATABASE_READY = False
+
 
 def _database_url():
     return os.environ.get("DATABASE_URL", DATABASE_URL).strip()
@@ -21,6 +23,10 @@ def _database_url():
 
 def _using_postgres():
     return bool(_database_url())
+
+
+def using_postgres():
+    return _using_postgres()
 
 
 @contextmanager
@@ -417,7 +423,15 @@ def import_visits_from_csv():
 
 
 def ensure_database_ready():
+    global _DATABASE_READY
+    if _DATABASE_READY:
+        return
+
     initialize_database()
+    if _using_postgres():
+        _DATABASE_READY = True
+        return
+
     student_signature = _students_source_signature()
 
     with get_connection() as conn:
@@ -436,8 +450,10 @@ def ensure_database_ready():
         with get_connection() as conn:
             _set_sync_state(conn, "students_source_signature", student_signature)
 
-    if visits_count == 0 and not _using_postgres():
+    if visits_count == 0:
         import_visits_from_csv()
+
+    _DATABASE_READY = True
 
 
 def fetch_students():
@@ -457,6 +473,31 @@ def fetch_students():
             "valid_until": row["valid_until"] or "",
         }
         for row in rows
+    }
+
+
+def fetch_student(student_id):
+    ensure_database_ready()
+    with get_connection() as conn:
+        row = _fetchone(
+            conn,
+            """
+            SELECT student_id, name, father_name, course, phone, valid_until
+            FROM students
+            WHERE student_id = ?
+            LIMIT 1
+            """,
+            (student_id,),
+        )
+    if row is None:
+        return None
+    return {
+        "student_id": row["student_id"],
+        "name": row["name"],
+        "father_name": row["father_name"] or "",
+        "course": row["course"] or "",
+        "phone": row["phone"] or "",
+        "valid_until": row["valid_until"] or "",
     }
 
 
@@ -483,6 +524,129 @@ def fetch_visits():
         }
         for row in rows
     ]
+
+
+def fetch_latest_visit_for_student(student_id):
+    ensure_database_ready()
+    with get_connection() as conn:
+        row = _fetchone(
+            conn,
+            """
+            SELECT visit_id, student_id, name, father_name, date, entry_time, exit_time
+            FROM visits
+            WHERE student_id = ?
+            ORDER BY date DESC, entry_time DESC, visit_id DESC
+            LIMIT 1
+            """,
+            (student_id,),
+        )
+    if row is None:
+        return None
+    return {
+        "visit_id": str(row["visit_id"]).zfill(5),
+        "student_id": row["student_id"],
+        "name": row["name"],
+        "father_name": row["father_name"] or "",
+        "date": row["date"],
+        "entry_time": row["entry_time"],
+        "exit_time": row["exit_time"] or "",
+    }
+
+
+def fetch_open_visit(student_id, visit_date):
+    ensure_database_ready()
+    with get_connection() as conn:
+        row = _fetchone(
+            conn,
+            """
+            SELECT visit_id, student_id, name, father_name, date, entry_time, exit_time
+            FROM visits
+            WHERE student_id = ? AND date = ? AND (exit_time IS NULL OR exit_time = '')
+            ORDER BY visit_id DESC
+            LIMIT 1
+            """,
+            (student_id, visit_date),
+        )
+    if row is None:
+        return None
+    return {
+        "visit_id": str(row["visit_id"]).zfill(5),
+        "student_id": row["student_id"],
+        "name": row["name"],
+        "father_name": row["father_name"] or "",
+        "date": row["date"],
+        "entry_time": row["entry_time"],
+        "exit_time": row["exit_time"] or "",
+    }
+
+
+def fetch_scan_context(student_id, visit_date):
+    ensure_database_ready()
+    with get_connection() as conn:
+        student_row = _fetchone(
+            conn,
+            """
+            SELECT student_id, name, father_name, course, phone, valid_until
+            FROM students
+            WHERE student_id = ?
+            LIMIT 1
+            """,
+            (student_id,),
+        )
+        if student_row is None:
+            return {"student": None, "last_visit": None, "open_visit": None}
+
+        latest_visit_row = _fetchone(
+            conn,
+            """
+            SELECT visit_id, student_id, name, father_name, date, entry_time, exit_time
+            FROM visits
+            WHERE student_id = ?
+            ORDER BY date DESC, entry_time DESC, visit_id DESC
+            LIMIT 1
+            """,
+            (student_id,),
+        )
+        open_visit_row = _fetchone(
+            conn,
+            """
+            SELECT visit_id, student_id, name, father_name, date, entry_time, exit_time
+            FROM visits
+            WHERE student_id = ? AND date = ? AND (exit_time IS NULL OR exit_time = '')
+            ORDER BY visit_id DESC
+            LIMIT 1
+            """,
+            (student_id, visit_date),
+        )
+
+    def _student_payload(row):
+        return {
+            "student_id": row["student_id"],
+            "name": row["name"],
+            "father_name": row["father_name"] or "",
+            "course": row["course"] or "",
+            "phone": row["phone"] or "",
+            "valid_until": row["valid_until"] or "",
+        }
+
+    def _visit_payload(row):
+        if row is None:
+            return None
+        return {
+            "visit_id": str(row["visit_id"]).zfill(5),
+            "student_id": row["student_id"],
+            "name": row["name"],
+            "father_name": row["father_name"] or "",
+            "date": row["date"],
+            "entry_time": row["entry_time"],
+            "exit_time": row["exit_time"] or "",
+        }
+
+    return {
+        "student": _student_payload(student_row),
+        "last_visit": _visit_payload(latest_visit_row),
+        "open_visit": _visit_payload(open_visit_row),
+    }
 
 
 def create_visit(student):
