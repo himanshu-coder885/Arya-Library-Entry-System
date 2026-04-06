@@ -18,6 +18,7 @@ ROOT_VISITS_FILE = BASE_DIR / "visits.csv"
 ROOT_ADMIN_CONFIG_FILE = BASE_DIR / "admin_config.json"
 ROOT_EMAIL_CONFIG_FILE = BASE_DIR / "email_config.json"
 ROOT_LIBRARY_DB_FILE = BASE_DIR / "library_data.db"
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 
 VISITS_FILE = RUNTIME_DATA_DIR / "visits.csv"
 ADMIN_CONFIG_FILE = RUNTIME_DATA_DIR / "admin_config.json"

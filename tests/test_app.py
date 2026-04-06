@@ -1,6 +1,9 @@
 import json
+import os
+import sys
 import tempfile
 import time
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -10,6 +13,57 @@ import library_app.auth as auth
 import library_app.config as config
 import library_app.data_store as data_store
 import library_app.database as database
+
+
+class FakePsycopgCursor:
+    def __init__(self, connection):
+        self.connection = connection
+        self.rows = []
+
+    def execute(self, query, params=()):
+        self.connection.executed.append((query, params))
+        if "RETURNING visit_id" in query:
+            self.rows = [{"visit_id": 11}]
+        elif "SELECT COUNT(*) AS total FROM students" in query:
+            self.rows = [{"total": 0}]
+        elif "SELECT COUNT(*) AS total FROM visits" in query:
+            self.rows = [{"total": 0}]
+        elif "SELECT value FROM sync_state" in query:
+            self.rows = []
+        else:
+            self.rows = []
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+    def fetchall(self):
+        return list(self.rows)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class FakePsycopgConnection:
+    def __init__(self):
+        self.executed = []
+        self.committed = False
+        self.rolled_back = False
+        self.closed = False
+
+    def cursor(self):
+        return FakePsycopgCursor(self)
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True
+
+    def close(self):
+        self.closed = True
 
 
 class LibraryAppTestCase(unittest.TestCase):
@@ -162,6 +216,32 @@ class LibraryAppTestCase(unittest.TestCase):
             self.assertEqual(login_response.status_code, 200)
             session_cookie = login_response.headers["Set-Cookie"].split(";", 1)[0].split("=", 1)[1]
             self.assertTrue(auth.is_authenticated(session_cookie))
+
+    def test_postgres_mode_uses_database_url_and_postgres_queries(self):
+        fake_connection = FakePsycopgConnection()
+        fake_psycopg = types.SimpleNamespace(connect=lambda *args, **kwargs: fake_connection)
+        fake_rows = types.SimpleNamespace(dict_row=object())
+
+        with (
+            patch.dict(os.environ, {"DATABASE_URL": "postgresql://example"}, clear=False),
+            patch.dict(sys.modules, {"psycopg": fake_psycopg, "psycopg.rows": fake_rows}),
+        ):
+            database.initialize_database()
+            visit = database.create_visit(
+                {
+                    "student_id": "LIB001",
+                    "name": "Test Student",
+                    "father_name": "Test Father",
+                }
+            )
+
+        self.assertEqual(visit["visit_id"], "00011")
+        executed_queries = "\n".join(query for query, _ in fake_connection.executed)
+        self.assertIn("CREATE TABLE IF NOT EXISTS students", executed_queries)
+        self.assertIn("CREATE TABLE IF NOT EXISTS visits", executed_queries)
+        self.assertIn("%s", executed_queries)
+        self.assertTrue(fake_connection.committed)
+        self.assertTrue(fake_connection.closed)
 
 
 if __name__ == "__main__":
